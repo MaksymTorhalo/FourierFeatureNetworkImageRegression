@@ -1,5 +1,6 @@
 # Fourier Feature Network Image Regression
 A Fourier Feature Network implementation for Regression tasks through Implicit Neural Representation. Theoretical and mathematical background is heavily based on the "Fourier Features Let Networks Learn High Frequency Functions in Low Dimensional Domains" by M. Tancik, P. P. Srinivasan, B. Mildenhall et al.
+
 This implementation is mainly focused on 2D Image Regression, however can be configured for 1D and requires minimal modification for 3D Regression tasks. 
 
 The architecture was implemented in PyTorch. Repository also contains a Jupyter Notebook file for Google Colab with a demo. UI for the demo was created using Gradio.
@@ -31,10 +32,10 @@ Cosine and Sine functions introduce non-linearity in the input, which helps the 
 As in the paper, multiple mappings were implemented, namely "Basic" and "Gaussian".
 
 ##### Basic mapping:
-The basic mapping ommits the B matrix (in the implementation replaces it with an Identity Matrix), which means that the input is only mapped to a single pair of cosine and sine terms with a fixed frequency. This shows little improvement, as the models Neural Tangent Kernel is still not adaptive enough to make fine steps needed to learn the high-frequency features. Input also stays low-dimentional, as we only double the dimension.
+The basic mapping ommits the B matrix (in the implementation replaces it with an Identity Matrix), which means that the input is only mapped to a single pair of cosine and sine terms with a fixed frequency. This shows little improvement, as the model's Neural Tangent Kernel is still not adaptive enough to make fine steps needed to learn the high-frequency features. Input also stays low-dimentional, as we only double the dimension.
 
 ##### Gaussian mapping:
-Gaussian mapping introduces the B matrix of size $$\mathbf{B} \in \mathbb{R}^{m \times d}$$, where m is the mapping dimention, which controlls how many frequencies the input is mapped to; and d is the input dimension. The values in B are $$B_{ij} \sim \mathcal{N}(0, \sigma^2)$$, where scale $$\sigma$$ controls the standard deviation of the Normal distribution. This introduces both high-dimentionality and changes the NTK to be stationary and more localized, thus allowing it to learn high-frequency details with much faster convergence. $$\sigma$$ directly controls the "width" of the NTK and the models ability to learn high-frequency details.
+Gaussian mapping introduces the B matrix of size $$\mathbf{B} \in \mathbb{R}^{m \times d}$$, where m is the mapping dimention, which controlls how many frequencies the input is mapped to; and d is the input dimension. The values in B are $$B_{ij} \sim \mathcal{N}(0, \sigma^2)$$, where scale $$\sigma$$ controls the standard deviation of the Normal distribution. This introduces both high-dimentionality and changes the NTK to be stationary and more localized, thus allowing it to learn high-frequency details with much faster convergence. $$\sigma$$ directly controls the "width" of the NTK and the model's ability to learn high-frequency details.
 
 #### Training
 The training function allows to parametrize the model and the FFM, as well as the dataset function. Image can be transformed to a different size before training, number of workers with the batch size for the dataloader can be assigned as well.
@@ -42,10 +43,10 @@ The training function allows to parametrize the model and the FFM, as well as th
 Mean Squared Error or L2 loss is used as in the paper. The optimizer is Adam, with parameters: $$lr=10^{-3}$$, $$\beta_1=0.9$$, $$\beta_2=0.999$$, $$\epsilon=10^{-8}$$.
 
 #### Evaluation
-The evaluation function allows for Super Resolution as well as post-training dropout.
+The evaluation function allows for Super Resolution as well as global configurable dropout.
 
 The Super Resolution expects two parameters, width and height. Once these are set, the evaluation dataset function will compute new input coordinates and pass them to the model. Since the model is an INR, it can interpolate inbetween the points, allowing for theoratically unbounded resolution.
 
-The "Dementia Factor" is a percentage value, which determines how much of the model's weights will be zeroed-out. An individual mask of normally distributed values is created for each Linear layer, which sets to zero all weights that are smaller then dementia factor in the mask to 0. This ensures proportionate and random "deletion" of weights. 
+The "Dementia Factor" is a percentage value, which determines how much of the model's weights will be zeroed-out. An individual mask of normally distributed values is created for each Linear layer, which sets to zero all weights that are smaller than the dementia factor in the mask to 0. This ensures proportionate and random "deletion" of weights. 
 
 One might draw parallels to the disease family that affects human brains, resulting in their gradual decay, destroying regions of the brain responsible for memory and other functions. In our case, the "memorized" image starts to loose segments and details, model "forgets" how to recreate certain colors and quickly fades into noise and breaks down after around 50%. Be careful to notice, though, that this does not recreate the actual disease progress and is not accurate to the biological process, at the very least due to the purely random nature of the introduced technique.
