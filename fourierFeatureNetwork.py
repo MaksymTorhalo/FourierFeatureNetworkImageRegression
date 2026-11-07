@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torch.optim import Adam
 from PIL import Image
@@ -64,38 +63,6 @@ class FourierFeatureNetwork(nn.Module):
         return self.mlp(x)
 
 
-class ImageCoordinateDataset(Dataset):
-    def __init__(self, pth, size=(0, 0)):
-        super().__init__()
-
-        img = Image.open(pth).convert('RGB')
-        if size != (0,0):
-            img = img.resize(size)
-        self.img_tensor = transforms.ToTensor()(img)
-        _, self.H, self.W = self.img_tensor.shape
-
-    def __len__(self):
-        return self.H * self.W
-
-    def get_h(self):
-        return self.H
-
-    def get_w(self):
-        return self.W
-
-    def __getitem__(self, idx):
-        row = idx // self.W
-        col = idx % self.W
-
-        x = col / (self.W - 1) if self.W > 1.0 else 0.0
-        y = row / (self.H - 1) if self.H > 1.0 else 0.0
-
-        coords = torch.tensor([x, y], dtype=torch.float32)
-        rgb = self.img_tensor[:, row, col]
-
-        return coords, rgb
-
-
 def train_ffn(epochs,
               img_pth,
               device,
@@ -108,18 +75,39 @@ def train_ffn(epochs,
               mapping_dim=256,
               hidden_dim=256,
               layers=4,
-              num_workers=0):
-    dataset = ImageCoordinateDataset(img_pth, img_size)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+              only_batches_to_vram=True):
+    img = Image.open(img_pth).convert('RGB')
+    if img_size != (0,0):
+        img = img.resize(img_size)
+    img_tensor = transforms.ToTensor()(img)
+    _, H, W = img_tensor.shape
+
+    x_coords = torch.linspace(0.0, 1.0, W)
+    y_coords = torch.linspace(0.0, 1.0, H)
+    grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing='ij')
+
+    coord_matrix = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=-1)
+    rgb_matrix = img_tensor.permute(1, 2, 0).reshape(-1, 3)
+    if not only_batches_to_vram:
+        coord_matrix = coord_matrix.to(device)
+        rgb_matrix = rgb_matrix.to(device)
 
     model = FourierFeatureNetwork(input_dim, output_dim, scale, mapping=mapping, mapping_dim=mapping_dim, layers=layers, hidden_dim=hidden_dim).to(device)
     criterion = nn.MSELoss()
     optimizer = Adam(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-08)
 
+    dataset_size = H * W
     for epoch in range(epochs):
         epoch_loss = 0.0
-        for coords, rgb in dataloader:
-            coords, rgb = coords.to(device), rgb.to(device)
+        permutation = torch.randperm(dataset_size, device=device)
+        if only_batches_to_vram:
+            permutation = permutation.cpu()
+        for i in range(0, dataset_size, batch_size):
+            indeces = permutation[i:i + batch_size]
+            coords, rgb = coord_matrix[indeces], rgb_matrix[indeces]
+            if only_batches_to_vram:
+                coords = coords.to(device)
+                rgb = rgb.to(device)
 
             optimizer.zero_grad()
             loss = criterion(model(coords), rgb)
@@ -128,10 +116,10 @@ def train_ffn(epochs,
 
             epoch_loss += loss.item()
 
-        print(f"Epoch: {epoch+1}/{epochs} | Loss: {epoch_loss / len(dataloader):.6f}")
+        print(f"Epoch: {epoch+1}/{epochs} | Loss: {epoch_loss / ((dataset_size + batch_size - 1) // batch_size):.6f}")
 
-    params = {'h': dataset.get_h(),
-              'w': dataset.get_w(),
+    params = {'h': H,
+              'w': W,
               'input_dim': input_dim,
               'output_dim': output_dim,
               'scale': scale,
@@ -152,18 +140,16 @@ def save_model(model, params):
     torch.save(savefile, f'models/FFN2dImReg_{t_now}.pth')
 
 
-def eval_model(model, device, h_target, w_target, batch_size=8192, dementia_factor=0.0):
-    model = copy.deepcopy(model)
+def eval_model(model, device, h_target, w_target, batch_size=8192, only_batches_to_vram=False, dementia_factor=0.0):
+    model = copy.deepcopy(model).to(device)
     model.eval()
 
     x_coords = torch.linspace(0.0, 1.0, w_target)
     y_coords = torch.linspace(0.0, 1.0, h_target)
     grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing='ij')
-    coords = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=-1)
-
-    from torch.utils.data import TensorDataset
-    dataset = TensorDataset(coords)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    coords_matrix = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=-1)
+    if not only_batches_to_vram:
+        coords_matrix = coords_matrix.to(device)
 
     predictions = []
     with torch.no_grad():
@@ -176,9 +162,12 @@ def eval_model(model, device, h_target, w_target, batch_size=8192, dementia_fact
 
                 layer_id += 1
 
-        for (batch_coords, ) in dataloader:
-            batch_coords = batch_coords.to(device)
-            preds = model(batch_coords)
+        dataset_size = w_target * h_target
+        for i in range(0, dataset_size, batch_size):
+            coords = coords_matrix[i : i + batch_size]
+            if only_batches_to_vram:
+                coords = coords.to(device)
+            preds = model(coords)
             predictions.append(preds)
 
     recreated_tensor = torch.cat(predictions, dim=0).view(h_target, w_target, 3).detach().cpu()
@@ -210,19 +199,19 @@ def plot_eval_img(img_tensor):
 if __name__ == "__main__":      # keep all function calls in the main process, if at least one has more than 0 workers
     try:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        img_pth = "samples/IMG_20260725_231542_193.jpg"
+        img_pth = "samples/stillworld.png"
 
 
-        model, param_dict = train_ffn(20, img_pth, device, num_workers=4, scale=15, mapping="gaussian", mapping_dim=256, hidden_dim=256)
+        model, param_dict = train_ffn(100, img_pth, device, scale=15, mapping="gaussian", mapping_dim=256, hidden_dim=256, only_batches_to_vram=False)
         save_model(model, param_dict)
-        # savefile = torch.load("models/FFN2dImReg_2026_07_24_22_55.pth", weights_only=True)
+        # savefile = torch.load("models/.pth", weights_only=True)
         # param_dict = savefile['param_dict']
         # model = FourierFeatureNetwork(input_dim=param_dict['input_dim'], output_dim=param_dict['output_dim'], scale=param_dict['scale'], mapping=param_dict['mapping'], mapping_dim=param_dict['mapping_dim'], hidden_dim=param_dict['hidden_dim']).to(device)
         # model.load_state_dict(savefile['state_dict'])
-        recreated_img = eval_model(model, device, param_dict['h'], param_dict['w'])
-        recreated_img2 = eval_model(model, device, param_dict['h'], param_dict['w'], dementia_factor=0.5)
-        # save_eval_img(recreated_img)
-        # save_eval_img(recreated_img2)
+        recreated_img = eval_model(model, device, param_dict['h'], param_dict['w'], only_batches_to_vram=False)
+        recreated_img2 = eval_model(model, device, param_dict['h'], param_dict['w'], dementia_factor=0.15, only_batches_to_vram=False)
+        save_eval_img(recreated_img)
+        save_eval_img(recreated_img2)
         plot_eval_img(recreated_img)
         plot_eval_img(recreated_img2)
 
