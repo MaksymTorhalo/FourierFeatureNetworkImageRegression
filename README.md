@@ -5,7 +5,7 @@ This implementation is mainly focused on 2D Image Regression, however can be con
 
 The architecture was implemented in PyTorch. Repository also contains a Jupyter Notebook file for Google Colab with a demo. UI for the demo was created using Gradio.
 
-<a target="_blank" href="https://github.com/MaksymTorhalo/FourierFeatureNetworkImageRegression/blob/ec4ff16129c16a062d51ee6e27ef0263321ac032/ffn_2d_image_regression.ipynb">
+<a target="_blank" href="https://colab.research.google.com/github/MaksymTorhalo/FourierFeatureNetworkImageRegression/blob/main/ffn_2d_image_regression.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
